@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PAMAS Frontend</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f5f7fb; color:#222; margin:0; padding:0; }
+    .wrap { max-width:1100px; margin:auto; padding:24px; }
+    h1,h2,h3 { margin:0 0 12px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+    .card { background:#fff; border-radius:14px; padding:20px; box-shadow:0 4px 18px rgba(0,0,0,.08); }
+    input, textarea { width:100%; padding:10px; margin-top:6px; margin-bottom:14px; border:1px solid #cfd6e4; border-radius:10px; box-sizing:border-box; }
+    button { background:#0b6b6f; color:#fff; border:none; padding:12px 16px; border-radius:10px; cursor:pointer; }
+    button:hover { background:#09575a; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#f3f5f9; padding:12px; border-radius:10px; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:10px; border-bottom:1px solid #e5e8f0; text-align:left; font-size:14px; }
+    .status { margin:10px 0; font-size:14px; color:#444; }
+    @media (max-width:900px) { .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PAMAS - Provenance-Aware Media Authentication System</h1>
+  <p>Register original media and verify suspicious media using provenance + deepfake-aware scoring.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Register Media</h2>
+      <div class="status" id="registerStatus">Ready</div>
+      <form id="registerForm">
+        <label>Creator Name</label>
+        <input type="text" id="creator_name" required />
+        <label>Creator ID</label>
+        <input type="text" id="creator_id" required />
+        <label>Description</label>
+        <textarea id="description"></textarea>
+        <label>Media File</label>
+        <input type="file" id="register_media" required />
+        <button type="submit">Register</button>
+      </form>
+      <h3>Registration Output</h3>
+      <pre id="registerOut">Waiting...</pre>
+    </div>
+
+    <div class="card">
+      <h2>Verify Media</h2>
+      <div class="status" id="verifyStatus">Ready</div>
+      <form id="verifyForm">
+        <label>Claimed Creator (optional)</label>
+        <input type="text" id="claimed_creator" />
+        <label>Media File</label>
+        <input type="file" id="verify_media" required />
+        <button type="submit">Verify</button>
+      </form>
+      <h3>Verification Output</h3>
+      <pre id="verifyOut">Waiting...</pre>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <h2>Registered Records</h2>
+    <button id="refreshBtn" type="button">Refresh Records</button>
+    <div style="overflow:auto;margin-top:14px">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Creator</th><th>File</th><th>SHA-256</th><th>TX ID</th><th>IPFS CID</th></tr>
+        </thead>
+        <tbody id="recordsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+
+async function safeJson(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: 'Invalid JSON response', raw: text };
+  }
+}
+
+document.getElementById('registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('registerStatus');
+  const out = document.getElementById('registerOut');
+
+  try {
+    const file = document.getElementById('register_media').files[0];
+    if (!file) {
+      out.textContent = 'Please select a file.';
+      return;
+    }
+
+    status.textContent = 'Registering...';
+
+    const fd = new FormData();
+    fd.append('creator_name', document.getElementById('creator_name').value);
+    fd.append('creator_id', document.getElementById('creator_id').value);
+    fd.append('description', document.getElementById('description').value);
+    fd.append('media', file);
+
+    const response = await fetch(API + '/register', {
+      method: 'POST',
+      body: fd
+    });
+
+    const data = await safeJson(response);
+    out.textContent = JSON.stringify(data, null, 2);
+    status.textContent = response.ok ? 'Registration complete' : 'Registration failed';
+    await loadRecords();
+  } catch (err) {
+    status.textContent = 'Registration failed';
+    out.textContent = 'Error: ' + err.message;
+  }
+});
+
+document.getElementById('verifyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('verifyStatus');
+  const out = document.getElementById('verifyOut');
+
+  try {
+    const file = document.getElementById('verify_media').files[0];
+    if (!file) {
+      out.textContent = 'Please select a file.';
+      return;
+    }
+
+    status.textContent = 'Verifying...';
+
+    const fd = new FormData();
+    fd.append('claimed_creator', document.getElementById('claimed_creator').value);
+    fd.append('media', file);
+
+    const response = await fetch(API + '/verify', {
+      method: 'POST',
+      body: fd
+    });
+
+    const data = await safeJson(response);
+    out.textContent = JSON.stringify(data, null, 2);
+    status.textContent = response.ok ? 'Verification complete' : 'Verification failed';
+  } catch (err) {
+    status.textContent = 'Verification failed';
+    out.textContent = 'Error: ' + err.message;
+  }
+});
+
+async function loadRecords() {
+  const tbody = document.getElementById('recordsBody');
+
+  try {
+    const response = await fetch(API + '/records');
+    const data = await safeJson(response);
+
+    if (!Array.isArray(data)) {
+      tbody.innerHTML = '<tr><td colspan="6">Backend not reachable</td></tr>';
+      return;
+    }
+
+    if (data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6">No records yet</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = data.map(x => `
+      <tr>
+        <td>${x.id}</td>
+        <td>${x.creator_name}</td>
+        <td>${x.file_name}</td>
+        <td>${x.sha256 ? x.sha256.slice(0,16) + '...' : '-'}</td>
+        <td>${x.tx_id ? x.tx_id.slice(0,12) + '...' : '-'}</td>
+        <td>${x.ipfs_cid || '-'}</td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6">Error loading records: ${err.message}</td></tr>`;
+  }
+}
+
+document.getElementById('refreshBtn').addEventListener('click', loadRecords);
+window.addEventListener('load', loadRecords);
+</script>
+</body>
+</html>
